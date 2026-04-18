@@ -1,0 +1,26 @@
+[package]
+name = "aic8800_fdrv"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+log = "0.4"
+sdhci-cv1800 = { git = "https://github.com/Ticonderoga2017/sdhci-cv1800.git" }
+axdriver_sdio = { git = "https://github.com/Ticonderoga2017/axdriver_sdio.git" }
+axpoll = "0.1"
+kspin = "0.1"
+axsync = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axsync" }
+axtask = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axtask", features = ["multitask"] }
+axhal = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axhal" }
+axplat = { version = "0.3", git = "https://github.com/arceos-org/axplat_crates.git", tag = "dev-v03", features = ["irq"] }
+# 添加 crypto 依赖
+hmac = { version = "0.12", default-features = false }
+sha1 = { version = "0.10", default-features = false }
+digest = { version = "0.10", default-features = false }
+aes = { version = "0.8", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false }
+
+axdriver_base = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "dev-v01" }
+axdriver_net = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "dev-v01" }
+axnet = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axnet" }
