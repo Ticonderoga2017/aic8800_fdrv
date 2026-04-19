@@ -10,6 +10,11 @@ extern crate alloc;
 use crate::core::bus::WifiBus;
 use crate::protocol::cmd::*;
 use crate::protocol::lmac_msg::*;
+use crate::protocol::{
+    send_scanu_start_req, collect_scan_results,
+    send_sm_connect_req, send_sm_disconnect_req, wait_for_indication,
+    send_key_add_req, send_key_del_req, send_set_control_port_req,
+};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -39,7 +44,7 @@ pub fn scan(
 
     // 清空 ind_queue 中的旧数据
     {
-        let mut queue = bus.ind_queue.lock();
+        let mut queue = bus.tx.ind_queue.lock();
         queue.clear();
     }
 
@@ -108,7 +113,7 @@ pub fn connect(
 
     // 清空 ind_queue
     {
-        let mut queue = bus.ind_queue.lock();
+        let mut queue = bus.tx.ind_queue.lock();
         queue.clear();
     }
 

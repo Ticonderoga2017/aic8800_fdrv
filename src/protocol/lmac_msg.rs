@@ -36,9 +36,12 @@ pub const fn msg_index(msg_id: u16) -> u16 {
     msg_id & ((1 << 10) - 1)
 }
 
-// Task IDs
+// Task IDs — TASK_DBG 和 DRV_TASK_ID 定义在 aic8800_common，
+// 此处导入以确保来源唯一
+pub use aic8800_common::{TASK_DBG, DRV_TASK_ID};
+
+// 其余任务 ID 仅在本模块使用
 pub const TASK_MM: u16 = 0;
-pub const TASK_DBG: u16 = 1;
 pub const TASK_SCAN: u16 = 2;
 pub const TASK_TDLS: u16 = 3;
 pub const TASK_SCANU: u16 = 4;
@@ -51,9 +54,6 @@ pub const TASK_RXU: u16 = 10;
 pub const TASK_RM: u16 = 11;
 pub const TASK_TWT: u16 = 12;
 pub const TASK_API: u16 = 13;
-
-/// Linux 驱动中所有 rwnx_msg_zalloc 调用使用 DRV_TASK_ID = 100 作为 src_id  
-pub const DRV_TASK_ID: u16 = 100;
 
 // ============================================================
 // LMAC 消息 ID（TASK_MM = 0, LMAC_FIRST_MSG(0) = 0）
@@ -86,10 +86,74 @@ pub const MM_KEY_ADD_REQ: u16 = 0x0024;
 pub const MM_KEY_ADD_CFM: u16 = 0x0025;
 
 // RF 校准相关
-pub const MM_SET_RF_CONFIG_REQ: u16 = 0x0067; // idx 103  
-pub const MM_SET_RF_CONFIG_CFM: u16 = 0x0068; // idx 104  
-pub const MM_SET_RF_CALIB_REQ: u16 = 0x0069; // idx 105  
-pub const MM_SET_RF_CALIB_CFM: u16 = 0x006A; // idx 106  
+pub const MM_SET_RF_CONFIG_REQ: u16 = 0x0067; // idx 103
+pub const MM_SET_RF_CONFIG_CFM: u16 = 0x0068; // idx 104
+pub const MM_SET_RF_CALIB_REQ: u16 = 0x0069; // idx 105
+pub const MM_SET_RF_CALIB_CFM: u16 = 0x006A; // idx 106
+
+/// mm_set_rf_calib_req 结构体大小 (v1, 对应 Linux 驱动 AIC8801 非D80X2路径)
+///   cal_cfg_24g(4) + cal_cfg_5g(4) + param_alpha(4) + bt_calib_en(4) +
+///   bt_calib_param(4) + xtal_cap(1) + xtal_cap_fine(1) = 22 bytes
+pub const MM_SET_RF_CALIB_REQ_SIZE: usize = 22;
+
+/// AIC8801 RF 校准: 2.4GHz 校准配置位掩码
+/// 对应 Linux: rf_calib_req->cal_cfg_24g = 0xbf (AIC8801)
+pub const AIC8801_RF_CAL_CFG_24G: u32 = 0xbf;
+
+/// AIC8801 RF 校准: 5GHz 校准配置位掩码
+/// 对应 Linux: rf_calib_req->cal_cfg_5g = 0x3f (AIC8801)
+pub const AIC8801_RF_CAL_CFG_5G: u32 = 0x3f;
+
+/// AIC8801 RF 校准: alpha 参数
+/// 对应 Linux: rf_calib_req->param_alpha = 0x0c34c008
+pub const AIC8801_RF_PARAM_ALPHA: u32 = 0x0c34c008;
+
+/// AIC8801 RF 校准: BT coexistence 校准参数
+/// 对应 Linux: rf_calib_req->bt_calib_param = 0x264203
+pub const AIC8801_RF_BT_CALIB_PARAM: u32 = 0x264203;
+
+// ===== ME Config =====
+// mac_htcapability: ht_capa_info(u16) + a_mpdu_param(u8) + mcs_rate[16](u8) +
+//                   ht_extended_capa(u16) + tx_beamforming_capa(u32) + asel_capa(u8) = 26
+pub const MAC_HT_CAPABILITY_SIZE: usize = 26;
+// mac_vhtcapability: vht_capa_info(u32) + rx_mcs_map(u16) + rx_highest(u16) +
+//                    tx_mcs_map(u16) + tx_highest(u16) = 12
+pub const MAC_VHT_CAPABILITY_SIZE: usize = 12;
+// mac_hecapability: mac_cap_info[6] + phy_cap_info[11] + mcs_supp(4*u16=8) + ppe_thres[25] = 50
+// 加上 C 结构体对齐 padding = 54
+pub const MAC_HE_CAPABILITY_SIZE: usize = 54;
+// me_config_req: ht_cap + vht_cap + he_cap + tail(tx_lft+phy_bw+ht_supp等 10 bytes)
+pub const ME_CONFIG_REQ_SIZE: usize = MAC_HT_CAPABILITY_SIZE + MAC_VHT_CAPABILITY_SIZE
+    + MAC_HE_CAPABILITY_SIZE + 10; // 102
+// HT capability flags
+pub const HT_CAPA_INFO_LDPC: u16 = 0x0001;
+pub const HT_AMPDU_FACTOR_MAX: u8 = 3;
+pub const HT_AMPDU_DENSITY_MAX: u8 = 7;
+pub const HT_MCS_RATE_1SS: u8 = 0xFF;
+// ME_CONFIG tail 字段偏移 (从 tail 起始处计算)
+pub const ME_CONFIG_TAIL_TX_LFT_OFF: usize = 0;   // u16, 默认 0
+pub const ME_CONFIG_TAIL_PHY_BW_OFF: usize = 2;    // u8, PHY_CHNL_BW_20
+pub const ME_CONFIG_TAIL_HT_SUPP_OFF: usize = 3;   // bool, true
+
+// ===== MM Start =====
+// mm_start_req: phy_cfg_tag(16*u32=64) + uapsd_timeout(u32) + lp_clk_accuracy(u16) = 70
+pub const MM_START_REQ_SIZE: usize = 70;
+pub const MM_START_PHY_CFG_SIZE: usize = 64;
+pub const MM_START_UAPSD_TIMEOUT_MS: u32 = 300;
+pub const MM_START_LP_CLK_ACCURACY_PPM: u16 = 20;
+
+// ===== MM Add Interface =====
+// mm_add_if_req: type(u8) + padding(1) + mac_addr(6) + p2p(bool) + padding(1) = 10
+pub const MM_ADD_IF_REQ_SIZE: usize = 10;
+
+// ===== MM Get MAC Address =====
+// mm_get_mac_addr_req: get(u32) = 1 表示请求获取
+pub const MM_GET_MAC_ADDR_REQ_GET: u32 = 1;
+
+// ===== ME Channel Config =====
+pub const ME_CHAN_MAX_2G4: usize = 14;
+pub const ME_CHAN_MAX_5G: usize = 28;
+pub const ME_CHAN_TX_POWER_DEFAULT: i8 = 30; // 30 dBm
 
 // MAC 地址
 pub const MM_GET_MAC_ADDR_REQ: u16 = 0x0073; // idx 115  
@@ -119,12 +183,10 @@ pub const PHY_CHNL_BW_20: u8 = 0;
 pub const PHY_CHNL_BW_40: u8 = 1;
 pub const PHY_CHNL_BW_80: u8 = 2;
 
-/// CMD 超时（与 Linux RWNX_80211_CMD_TIMEOUT_MS 一致）  
+/// CMD 超时（与 Linux RWNX_80211_CMD_TIMEOUT_MS 一致）
 pub const CMD_TIMEOUT_MS: u64 = 6000;
 
-// Frame construction constants
-pub const DUMMY_WORD_LEN: usize = 4;
-pub const TAIL_LEN: usize = 4;
+/// CMD TX 默认超时（当 timeout_ms == 0 时使用）
 pub const CMD_TX_TIMEOUT_DEFAULT_MS: u64 = 5000;
 
 #[derive(Debug)]
@@ -156,10 +218,14 @@ pub const SCANU_START_CFM_ADDTIONAL: u16 = lmac_first_msg(TASK_SCANU) + 9; // 0x
 pub const SCANU_CANCEL_REQ: u16 = lmac_first_msg(TASK_SCANU) + 10; // 0x100A
 pub const SCANU_CANCEL_CFM: u16 = lmac_first_msg(TASK_SCANU) + 11; // 0x100B
 
-// ========== 常量 ==========
+// ========== 扫描/地址结构体常量 ==========
+/// 最大扫描 SSID 数量
 pub const SCAN_SSID_MAX: usize = 3;
-pub const SCAN_CHANNEL_MAX: usize = 42; // MAC_DOMAINCHANNEL_24G_MAX(14) + MAC_DOMAINCHANNEL_5G_MAX(28)
+/// 最大扫描信道数量 (2.4GHz 14 + 5GHz 28)
+pub const SCAN_CHANNEL_MAX: usize = 42;
+/// SSID 最大长度 (不含 length 字节)
 pub const MAC_SSID_LEN: usize = 32;
+/// MAC 地址长度
 pub const MAC_ADDR_LEN: usize = 6;
 
 /// 从 msg_id 提取 task_id: bits[15..10]
@@ -167,13 +233,13 @@ pub const fn msg_task(id: u16) -> u16 {
     id >> 10
 }
 
-/// mac_chan_def: 6 bytes (freq:u16 + band:u8 + flags:u8 + tx_power:i8)
+/// mac_chan_def 结构体大小: freq(u16) + band(u8) + flags(u8) + tx_power(i8) + padding = 6 bytes
 pub const MAC_CHAN_DEF_SIZE: usize = 6;
 
-/// mac_ssid: 33 bytes (length:u8 + array:[u8;32])
+/// mac_ssid 结构体大小: length(u8) + array([u8;32]) = 33 bytes
 pub const MAC_SSID_SIZE: usize = 33;
 
-/// mac_addr: 6 bytes (array:[u16;3], 即 6 字节)
+/// mac_addr 结构体大小: array([u16;3]) = 6 bytes
 pub const MAC_ADDR_SIZE: usize = 6;
 
 //   chan[42]:     42 * 6 = 252   (offset 0)
@@ -268,8 +334,7 @@ pub const WLAN_EID_SSID: u8 = 0;
 pub const WLAN_EID_RSN: u8 = 48;
 
 // ========== 802.1X EtherType ==========
-/// 802.1X Authentication (EAPOL) EtherType，网络字节序  
-pub const ETH_P_PAE: u16 = 0x888E;
+// ETH_P_PAE 统一在 consts.rs 中定义，避免多重导出冲突
 
 // ========== sm_connect_req 结构体布局常量 ==========
 //

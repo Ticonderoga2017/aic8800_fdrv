@@ -2,8 +2,8 @@
 //!
 //! 包含发送和接收线程
 
-mod rx;
-mod tx;
+pub mod rx;
+pub mod tx;
 
 pub use rx::*;
 pub use tx::*;

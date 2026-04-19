@@ -2,36 +2,44 @@
 //!
 //! 为外部程序提供简单易用的 WiFi 连接接口
 //!
-//! # 使用示例
+//! # 完整使用示例
 //!
 //! ```no_run
-//! use aic8800_fdrv::wifi_api::{WifiConfig, WifiClient};
-//! use alloc::sync::Arc;
+//! use aic8800_fdrv::{WifiConfig, WifiClient};
 //!
-//! // 1. 创建 WiFi 客户端
-//! let bus = Arc::new(/* 已初始化的 WifiBus */);
+//! // 1. 初始化 SDHCI 控制器 + 固件 (由调用方完成)
+//! let bus = aic8800_fdrv::init(sdio)?;
+//!
+//! // 2. 创建客户端 + LMAC 配置
 //! let client = WifiClient::new(bus);
+//! let mac = client.lmac_configure(6000)?;
 //!
-//! // 2. 扫描网络
-//! let networks = client.scan(None, 10000)?;
-//!
-//! // 3. 连接到 WPA2 加密网络
-//! let config = WifiConfig::wpa2_psk("MyNetwork", "password123");
+//! // 3. 扫描 → 连接
+//! let config = WifiConfig::wpa2_psk("SSID", "password");
 //! client.connect(&config, 15000)?;
 //!
-//! // 4. 等待连接完成
-//! client.wait_for_connection(10000)?;
+//! // 4. 暂存网络设备 (上层通过 take_wifi_net_device 取出并注册到 axnet)
+//! client.store_net_device();
 //! ```
 
 use crate::core::bus::WifiBus;
 use crate::crypto::wpa2::*;
 use crate::protocol::cmd::*;
 use crate::protocol::lmac_msg::*;
+use crate::protocol::{
+    send_txpwr_idx_req, send_txpwr_ofst_req, send_rf_calib_req,
+    send_me_config_req, send_me_chan_config_req, send_mm_start_req,
+    send_mm_set_filter_req, send_get_mac_addr_req, send_mm_add_if_req,
+    send_set_control_port_req, wait_for_eapol, send_eapol_data_frame,
+};
 use crate::wifi::manager::{self, build_wpa2_rsn_ie_from_ap, disconnect};
-use alloc::string::String;
+use alloc::{format, string::String};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+
+// 网络设备注册（net 模块启用后可用）
+use crate::net::device::store_wifi_net_device;
 
 /// WiFi 连接配置
 #[derive(Clone, Debug)]
@@ -129,6 +137,16 @@ impl fmt::Display for WifiError {
 
 impl core::error::Error for WifiError {}
 
+impl From<CmdError> for WifiError {
+    fn from(e: CmdError) -> Self {
+        match e {
+            CmdError::Timeout => WifiError::ConnectionTimeout,
+            CmdError::FirmwareError => WifiError::AuthenticationFailed,
+            _ => WifiError::OperationFailed(format!("{:?}", e)),
+        }
+    }
+}
+
 /// 扫描结果
 #[derive(Clone, Debug)]
 pub struct WifiNetwork {
@@ -181,9 +199,12 @@ pub enum ConnectionStatus {
 }
 
 /// WiFi 客户端
+///
+/// 封装完整的 WiFi 生命周期：LMAC 配置 → 扫描 → 连接 → 数据传输 → 断连
 pub struct WifiClient {
     bus: Arc<WifiBus>,
     vif_idx: u8,
+    sta_mac: Option<[u8; 6]>,
 }
 
 impl WifiClient {
@@ -191,7 +212,8 @@ impl WifiClient {
     pub fn new(bus: Arc<WifiBus>) -> Self {
         Self {
             bus,
-            vif_idx: 0, // 默认使用 VIF 0
+            vif_idx: 0,
+            sta_mac: None,
         }
     }
 
@@ -201,27 +223,67 @@ impl WifiClient {
         self
     }
 
-    /// 获取连接状态
-    pub fn get_status(&self) -> ConnectionStatus {
-        let vif_idx = self
-            .bus
-            .connected_vif_idx
-            .load(core::sync::atomic::Ordering::Acquire);
-        if vif_idx == 0xFF {
-            ConnectionStatus::Disconnected
-        } else {
-            ConnectionStatus::Connected
-        }
+    // ================================================================
+    // Phase 1: LMAC 配置
+    // ================================================================
+
+    /// 执行完整 LMAC 配置（初始化后必须调用一次）
+    ///
+    /// 内部发送以下命令序列：
+    /// 1. MM_SET_TXPWR_IDX_LVL_REQ — 发射功率等级
+    /// 2. MM_SET_TXPWR_OFST_REQ — 发射功率偏移
+    /// 3. MM_SET_RF_CALIB_REQ — RF 校准
+    /// 4. ME_CONFIG_REQ — MAC 层 HT 能力
+    /// 5. ME_CHAN_CONFIG_REQ — 2.4GHz 信道列表
+    /// 6. MM_START_REQ — 启动 MAC
+    /// 7. MM_GET_MAC_ADDR_REQ — 获取 STA MAC 地址
+    /// 8. MM_ADD_IF_REQ — 添加 STA 接口
+    /// 9. MM_SET_FILTER_REQ — 设置接收过滤器
+    ///
+    /// 成功后返回 STA MAC 地址，并自动保存 vif_idx。
+    pub fn lmac_configure(&mut self, timeout_ms: u64) -> Result<[u8; 6], WifiError> {
+        log::info!("[WifiClient] LMAC configuration starting...");
+
+        // 1. TX power
+        send_txpwr_idx_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
+        send_txpwr_ofst_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
+
+        // 2. RF calibration
+        send_rf_calib_req(&self.bus, timeout_ms * 2).map_err(WifiError::from)?;
+
+        // 3. ME configuration
+        send_me_config_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
+        send_me_chan_config_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
+        send_mm_start_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
+
+        // 4. Get MAC address
+        let mac = send_get_mac_addr_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
+
+        // 5. Add interface
+        let vif_idx = send_mm_add_if_req(&self.bus, &mac, timeout_ms).map_err(WifiError::from)?;
+        self.vif_idx = vif_idx;
+
+        // 6. Set RX filter
+        send_mm_set_filter_req(&self.bus, 0x1502_868C, timeout_ms).map_err(WifiError::from)?;
+
+        // 保存 MAC
+        self.sta_mac = Some(mac);
+
+        // 更新 bus 连接状态
+        self.bus.conn.vif_idx.store(vif_idx, core::sync::atomic::Ordering::Release);
+
+        log::info!(
+            "[WifiClient] LMAC configured: mac={:02x?}, vif_idx={}",
+            mac, vif_idx
+        );
+        Ok(mac)
     }
 
+    // ================================================================
+    // Phase 2: 扫描
+    // ================================================================
+
     /// 扫描 WiFi 网络
-    ///
-    /// # 参数
-    /// - `ssid`: 可选的目标 SSID，None 表示扫描所有网络
-    /// - `timeout_ms`: 扫描超时时间 (毫秒)
-    ///
-    /// # 返回
-    /// 扫到的网络列表
     pub fn scan(
         &self,
         ssid: Option<&[u8]>,
@@ -229,14 +291,12 @@ impl WifiClient {
     ) -> Result<Vec<WifiNetwork>, WifiError> {
         log::info!("[WifiClient] Starting scan...");
 
-        // 执行扫描
-        let results = scan(&self.bus, self.vif_idx, ssid, timeout_ms).map_err(|e| {
+        let results = manager::scan(&self.bus, self.vif_idx, ssid, timeout_ms).map_err(|e| {
             log::error!("[WifiClient] Scan failed: {:?}", e);
             WifiError::ScanFailed
         })?;
 
-        // 转换为 WifiNetwork 格式
-        let networks = results
+        let networks: Vec<WifiNetwork> = results
             .into_iter()
             .map(|r| WifiNetwork {
                 ssid: r.ssid.to_vec(),
@@ -254,32 +314,24 @@ impl WifiClient {
             })
             .collect();
 
-        log::info!(
-            "[WifiClient] Scan complete: {} networks found",
-            networks.len()
-        );
+        log::info!("[WifiClient] Scan complete: {} networks found", networks.len());
         Ok(networks)
     }
 
     /// 查找指定 SSID 的网络
-    ///
-    /// # 参数
-    /// - `ssid`: 目标 SSID
-    /// - `timeout_ms`: 扫描超时时间 (毫秒)
     pub fn find_network(&self, ssid: &[u8], timeout_ms: u64) -> Result<WifiNetwork, WifiError> {
         let networks = self.scan(Some(ssid), timeout_ms)?;
-
         networks
             .into_iter()
             .find(|n| n.ssid[..n.ssid_len as usize] == *ssid)
             .ok_or(WifiError::NetworkNotFound)
     }
 
-    /// 连接到 WiFi 网络
-    ///
-    /// # 参数
-    /// - `config`: WiFi 连接配置
-    /// - `timeout_ms`: 连接超时时间 (毫秒)
+    // ================================================================
+    // Phase 3: 连接
+    // ================================================================
+
+    /// 连接到 WiFi 网络（自动扫描 → 连接 → WPA2 握手）
     pub fn connect(&self, config: &WifiConfig, timeout_ms: u64) -> Result<(), WifiError> {
         log::info!(
             "[WifiClient] Connecting to SSID: {:?}, auth: {:?}",
@@ -287,7 +339,6 @@ impl WifiClient {
             config.auth_type
         );
 
-        // 检查是否已连接
         if self.get_status() == ConnectionStatus::Connected {
             return Err(WifiError::AlreadyConnected);
         }
@@ -295,26 +346,51 @@ impl WifiClient {
         // 扫描目标网络
         let network = self.find_network(&config.ssid, 10000)?;
 
-        // 构建 RSN IE (对于 WPA2 网络)
+        self.connect_to(&network, config, timeout_ms)
+    }
+
+    /// 连接到已知网络（跳过扫描）
+    ///
+    /// 适用于已通过 scan() 获取 AP 信息的场景
+    pub fn connect_to(
+        &self,
+        network: &WifiNetwork,
+        config: &WifiConfig,
+        timeout_ms: u64,
+    ) -> Result<(), WifiError> {
+        // 标记为正在连接
+        self.bus.conn.set_status(crate::core::STATUS_CONNECTING);
+
+        let result = self.connect_to_inner(network, config, timeout_ms);
+        match &result {
+            Ok(()) => {
+                self.bus.conn.set_status(crate::core::STATUS_CONNECTED);
+                self.bus.conn.ap_mac.lock().replace(network.bssid);
+            }
+            Err(_) => {
+                self.bus.conn.set_status(crate::core::STATUS_FAILED);
+            }
+        }
+        result
+    }
+
+    fn connect_to_inner(
+        &self,
+        network: &WifiNetwork,
+        config: &WifiConfig,
+        timeout_ms: u64,
+    ) -> Result<(), WifiError> {
+        // 构建 RSN IE
         let wpa2_ie = if config.auth_type == WifiAuthType::Wpa2Psk {
             if !network.has_rsn {
-                log::warn!(
-                    "[WifiClient] Target network doesn't have RSN IE, using default WPA2 IE"
-                );
+                log::warn!("[WifiClient] Target network doesn't have RSN IE, using default WPA2 IE");
             }
             build_wpa2_rsn_ie_from_ap(&network.rsn_ie)
         } else {
             Vec::new()
         };
 
-        // 构建 flags
-        let flags = if config.auth_type == WifiAuthType::Wpa2Psk {
-            WPA_WPA2_IN_USE | CONTROL_PORT_HOST | CONTROL_PORT_NO_ENC
-        } else {
-            0
-        };
-
-        // 执行连接
+        // 发送连接请求
         let connect_result = manager::connect(
             &self.bus,
             self.vif_idx,
@@ -323,25 +399,24 @@ impl WifiClient {
             network.channel_freq,
             &wpa2_ie,
             timeout_ms,
-        )
-        .map_err(|e| match e {
-            CmdError::Timeout => WifiError::ConnectionTimeout,
-            CmdError::FirmwareError => WifiError::AuthenticationFailed,
-            _ => WifiError::OperationFailed(format!("Connection failed: {:?}", e)),
-        })?;
+        ).map_err(WifiError::from)?;
 
         log::info!(
-            "[WifiClient] Connection initiated: ap_idx={}, sta_idx={}",
-            connect_result.ap_idx,
+            "[WifiClient] Connection established: ap_idx={}",
             connect_result.ap_idx
         );
 
-        // 如果是 WPA2-PSK，需要执行四次握手
+        // 保存 sta_idx 供 TX 数据帧使用
+        self.bus.conn.sta_idx.store(connect_result.ap_idx, core::sync::atomic::Ordering::Release);
+
+        // WPA2 四次握手
         if config.auth_type == WifiAuthType::Wpa2Psk {
             if let Some(ref password) = config.password {
                 self.perform_wpa2_handshake(
                     connect_result.ap_idx,
                     &network.bssid,
+                    &config.ssid,
+                    &wpa2_ie,
                     password,
                     timeout_ms,
                 )?;
@@ -356,36 +431,78 @@ impl WifiClient {
         &self,
         sta_idx: u8,
         bssid: &[u8; 6],
+        ssid: &[u8],
+        rsn_ie: &[u8],
         password: &[u8],
         timeout_ms: u64,
     ) -> Result<(), WifiError> {
         log::info!("[WifiClient] Starting WPA2 handshake...");
 
-        // 获取自己的 MAC 地址
-        let own_mac = get_mac_address(&self.bus, 5000)
-            .map_err(|e| WifiError::OperationFailed(format!("Failed to get MAC: {:?}", e)))?;
+        let own_mac = self.sta_mac.ok_or_else(|| {
+            WifiError::OperationFailed("MAC address not set, call lmac_configure() first".into())
+        })?;
 
-        // 创建 WPA2 状态机
-        let mut wpa2 =
-            Wpa2Supplicant::new(own_mac, *bssid, password.to_vec(), sta_idx, self.vif_idx);
+        let mut handshake = Wpa2Handshake::new(password, ssid, bssid, &own_mac, rsn_ie);
 
-        // 执行握手
-        wpa2.run_handshake(&self.bus, timeout_ms)
-            .map_err(|e| match e {
-                WpaError::Timeout => WifiError::ConnectionTimeout,
-                WpaError::MicError => WifiError::InvalidPassword,
-                WpaError::FirmwareError => WifiError::AuthenticationFailed,
-                _ => WifiError::OperationFailed(format!("Handshake failed: {:?}", e)),
-            })?;
+        loop {
+            // 等待 EAPOL 帧
+            let eapol = wait_for_eapol(&self.bus, timeout_ms)
+                .map_err(|_| WifiError::ConnectionTimeout)?;
 
-        log::info!("[WifiClient] WPA2 handshake completed successfully");
-        Ok(())
+            match handshake.process_eapol(&eapol) {
+                Ok(HandshakeAction::SendM2(m2)) => {
+                    send_eapol_data_frame(&self.bus, bssid, &own_mac, &m2, self.vif_idx, sta_idx)
+                        .map_err(|e| WifiError::OperationFailed(format!("Send M2 failed: {:?}", e)))?;
+                }
+                Ok(HandshakeAction::Completed(result)) => {
+                    // 安装 PTK
+                    manager::install_pairwise_key(
+                        &self.bus, self.vif_idx, sta_idx, MAC_CIPHER_CCMP, &result.tk, 0,
+                    ).map_err(|e| WifiError::OperationFailed(format!("Install PTK failed: {:?}", e)))?;
+
+                    // 安装 GTK
+                    manager::install_group_key(
+                        &self.bus, self.vif_idx, 0xFF, MAC_CIPHER_CCMP, &result.gtk, result.gtk_key_idx,
+                    ).map_err(|e| WifiError::OperationFailed(format!("Install GTK failed: {:?}", e)))?;
+
+                    // 发送 M4
+                    send_eapol_data_frame(&self.bus, bssid, &own_mac, &result.m4_frame, self.vif_idx, sta_idx)
+                        .map_err(|e| WifiError::OperationFailed(format!("Send M4 failed: {:?}", e)))?;
+
+                    // 打开控制端口
+                    send_set_control_port_req(&self.bus, sta_idx, true, 5000)
+                        .map_err(|e| WifiError::OperationFailed(format!("Open control port failed: {:?}", e)))?;
+
+                    log::info!("[WifiClient] WPA2 handshake completed successfully");
+                    return Ok(());
+                }
+                Err(WpaError::MicMismatch) => return Err(WifiError::InvalidPassword),
+                Err(e) => return Err(WifiError::OperationFailed(format!("Handshake error: {:?}", e))),
+            }
+        }
+    }
+
+    // ================================================================
+    // Phase 4: 状态 & 控制
+    // ================================================================
+
+    /// 获取连接状态
+    pub fn get_status(&self) -> ConnectionStatus {
+        match self.bus.conn.get_status() {
+            crate::core::STATUS_DISCONNECTED => ConnectionStatus::Disconnected,
+            crate::core::STATUS_CONNECTING => ConnectionStatus::Connecting,
+            crate::core::STATUS_CONNECTED => ConnectionStatus::Connected,
+            crate::core::STATUS_FAILED => ConnectionStatus::Failed,
+            _ => ConnectionStatus::Disconnected,
+        }
+    }
+
+    /// 获取 MAC 地址（需要先调用 lmac_configure）
+    pub fn get_mac_address(&self) -> Option<[u8; 6]> {
+        self.sta_mac
     }
 
     /// 等待连接完成
-    ///
-    /// # 参数
-    /// - `timeout_ms`: 等待超时时间 (毫秒)
     pub fn wait_for_connection(&self, timeout_ms: u64) -> Result<(), WifiError> {
         let start = axhal::time::monotonic_time_nanos();
         let timeout_ns = timeout_ms * 1_000_000;
@@ -394,12 +511,10 @@ impl WifiClient {
             if self.get_status() == ConnectionStatus::Connected {
                 return Ok(());
             }
-
             let elapsed = axhal::time::monotonic_time_nanos() - start;
             if elapsed > timeout_ns {
                 return Err(WifiError::ConnectionTimeout);
             }
-
             axtask::yield_now();
         }
     }
@@ -412,9 +527,11 @@ impl WifiClient {
             return Err(WifiError::NotConnected);
         }
 
-        disconnect(&self.bus, self.vif_idx, 3) // reason code 3 = DEAUTH_LEAVING
+        disconnect(&self.bus, self.vif_idx, 3)
             .map_err(|e| WifiError::OperationFailed(format!("Disconnect failed: {:?}", e)))?;
 
+        self.bus.conn.set_status(crate::core::STATUS_DISCONNECTED);
+        *self.bus.conn.ap_mac.lock() = None;
         log::info!("[WifiClient] Disconnected");
         Ok(())
     }
@@ -424,32 +541,27 @@ impl WifiClient {
         if self.get_status() != ConnectionStatus::Connected {
             return None;
         }
-
-        // 从总线状态获取当前连接信息
-        let vif_idx = self
-            .bus
-            .connected_vif_idx
-            .load(core::sync::atomic::Ordering::Acquire);
-        if vif_idx != 0xFF {
-            // 这里需要从总线获取实际连接的 SSID
-            // 暂时返回 None，需要在总线状态中添加 SSID 字段
-            None
-        } else {
-            None
-        }
+        // TODO: 从 bus 状态获取实际连接的 SSID
+        None
     }
 
     /// 获取信号强度
     pub fn get_rssi(&self) -> Option<i8> {
-        // 这里需要从总线状态获取当前信号强度
-        // 暂时返回 None，需要在总线状态中添加 RSSI 字段
+        // TODO: 从 bus 状态获取当前信号强度
         None
     }
-}
 
-/// 获取 MAC 地址
-fn get_mac_address(bus: &Arc<WifiBus>, timeout_ms: u64) -> Result<[u8; 6], CmdError> {
-    send_get_mac_addr_req(bus, timeout_ms)
+    // ================================================================
+    // Phase 5: 网络注册 (需要启用 net feature)
+    // ================================================================
+
+    /// 创建并暂存 WiFi 网络设备
+    ///
+    /// 设备存入全局，由 StarryOS 上层通过 `take_wifi_net_device()` 取出注册。
+    pub fn store_net_device(&self) {
+        let mac = self.sta_mac.unwrap_or([0; 6]);
+        store_wifi_net_device(Arc::clone(&self.bus), mac);
+    }
 }
 
 #[cfg(test)]

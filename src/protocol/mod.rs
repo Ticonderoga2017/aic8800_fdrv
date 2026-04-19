@@ -1,9 +1,70 @@
 //! 协议和命令模块
-//!
-//! 包含 LMAC 消息定义、命令发送和超时处理
 
-mod cmd;
-mod lmac_msg;
+pub mod cmd;
+pub mod lmac_msg;
+pub mod scan;
+pub mod connection;
+pub mod config;
+pub mod key;
 
+// 重导出 cmd 中的公共 API（CMD 框架 + EAPOL）
 pub use cmd::*;
-pub use lmac_msg::*;
+
+// 重导出子模块公共 API
+pub use scan::{send_scanu_start_req, collect_scan_results};
+pub use connection::{
+    wait_for_indication, send_sm_connect_req, send_sm_disconnect_req, send_mm_add_if_req,
+};
+pub use config::{
+    send_txpwr_idx_req, send_txpwr_ofst_req, send_rf_calib_req,
+    send_me_config_req, send_me_chan_config_req, send_mm_start_req,
+    send_mm_set_filter_req, send_mm_set_idle_req, send_set_control_port_req,
+    send_get_mac_addr_req,
+};
+pub use key::{send_key_add_req, send_key_del_req};
+
+// 显式重导出 lmac_msg 中的协议定义
+pub use lmac_msg::{
+    LmacMsg, ScanResult, ConnectResult, DisconnectInfo, WifiState, CmdError,
+    lmac_first_msg, msg_index, msg_task,
+    TASK_MM, TASK_DBG, TASK_SCAN, TASK_TDLS, TASK_SCANU, TASK_ME, TASK_SM,
+    TASK_APM, TASK_BAM, TASK_MESH, TASK_RXU, TASK_RM, TASK_TWT, TASK_API,
+    DRV_TASK_ID,
+    MM_SET_STACK_START_REQ, MM_SET_STACK_START_CFM,
+    MM_RESET_REQ, MM_RESET_CFM, MM_START_REQ, MM_START_CFM,
+    MM_VERSION_REQ, MM_VERSION_CFM, MM_ADD_IF_REQ, MM_ADD_IF_CFM,
+    MM_REMOVE_IF_REQ, MM_REMOVE_IF_CFM, MM_STA_ADD_REQ, MM_STA_ADD_CFM,
+    MM_STA_DEL_REQ, MM_STA_DEL_CFM, MM_SET_FILTER_REQ, MM_SET_FILTER_CFM,
+    MM_SET_CHANNEL_REQ, MM_SET_CHANNEL_CFM, MM_SET_IDLE_REQ, MM_SET_IDLE_CFM,
+    MM_KEY_ADD_REQ, MM_KEY_ADD_CFM, MM_KEY_DEL_REQ, MM_KEY_DEL_CFM,
+    MM_SET_RF_CONFIG_REQ, MM_SET_RF_CONFIG_CFM, MM_SET_RF_CALIB_REQ, MM_SET_RF_CALIB_CFM,
+    MM_GET_MAC_ADDR_REQ, MM_GET_MAC_ADDR_CFM,
+    MM_SET_TXPWR_IDX_LVL_REQ, MM_SET_TXPWR_IDX_LVL_CFM,
+    MM_SET_TXPWR_OFST_REQ, MM_SET_TXPWR_OFST_CFM,
+    ME_CONFIG_REQ, ME_CONFIG_CFM, ME_CHAN_CONFIG_REQ, ME_CHAN_CONFIG_CFM,
+    ME_SET_CONTROL_PORT_REQ, ME_SET_CONTROL_PORT_CFM,
+    SCANU_START_REQ, SCANU_START_CFM, SCANU_JOIN_REQ, SCANU_JOIN_CFM,
+    SCANU_RESULT_IND, SCANU_FAST_REQ, SCANU_FAST_CFM,
+    SCANU_VENDOR_IE_REQ, SCANU_VENDOR_IE_CFM, SCANU_START_CFM_ADDTIONAL,
+    SCANU_CANCEL_REQ, SCANU_CANCEL_CFM,
+    SM_CONNECT_REQ, SM_CONNECT_CFM, SM_CONNECT_IND,
+    SM_DISCONNECT_REQ, SM_DISCONNECT_CFM, SM_DISCONNECT_IND,
+    SM_EXTERNAL_AUTH_REQUIRED_IND, SM_EXTERNAL_AUTH_REQUIRED_RSP,
+    SM_FT_AUTH_IND, SM_FT_AUTH_RSP, SM_RSP_TIMEOUT_IND,
+    SM_COEX_TS_TIMEOUT_IND, SM_EXTERNAL_AUTH_REQUIRED_RSP_CFM,
+    MM_STA, MM_IBSS, MM_AP,
+    PHY_CHNL_BW_20, PHY_CHNL_BW_40, PHY_CHNL_BW_80,
+    CMD_TIMEOUT_MS, CMD_TX_TIMEOUT_DEFAULT_MS,
+    CHAN_2G4_FREQS,
+    WLAN_AUTH_OPEN, WLAN_AUTH_SHARED_KEY, WLAN_AUTH_FT, WLAN_AUTH_SAE,
+    MAC_CIPHER_WEP40, MAC_CIPHER_TKIP, MAC_CIPHER_CCMP, MAC_CIPHER_WEP104,
+    CONTROL_PORT_HOST, CONTROL_PORT_NO_ENC, DISABLE_HT,
+    WPA_WPA2_IN_USE, MFP_IN_USE, REASSOCIATION,
+    WLAN_EID_SSID, WLAN_EID_RSN,
+    MAC_SSID_LEN, MAC_ADDR_LEN, MAC_CHAN_DEF_SIZE, MAC_SSID_SIZE, MAC_ADDR_SIZE,
+    MAC_SEC_KEY_LEN, SCAN_SSID_MAX, SCAN_CHANNEL_MAX,
+    SCANU_START_REQ_SIZE,
+    SM_CONNECT_REQ_BASE_SIZE, SM_DISCONNECT_REQ_SIZE,
+    MM_KEY_ADD_REQ_SIZE, MM_KEY_DEL_REQ_SIZE, ME_SET_CONTROL_PORT_REQ_SIZE,
+    SM_ASSOC_IE_LEN, SM_DISCONNECT_IND_SIZE,
+};

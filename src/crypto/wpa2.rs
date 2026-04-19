@@ -21,11 +21,10 @@ use aes::cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray};
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 
-/// EAPOL ethertype (网络字节序)  
-pub const ETH_P_PAE: u16 = 0x888E;
+use crate::consts::ETH_P_PAE;
 
-/// EAPOL 版本  
-const EAPOL_VERSION: u8 = 0x01; // 802.1X-2004  
+/// EAPOL 版本 (802.1X-2004)
+const EAPOL_VERSION: u8 = 0x01;
 
 /// EAPOL 类型  
 const EAPOL_TYPE_KEY: u8 = 0x03;

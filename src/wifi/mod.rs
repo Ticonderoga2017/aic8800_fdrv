@@ -2,8 +2,8 @@
 //!
 //! 包含扫描、连接、断连等高层 WiFi 管理 API
 
-mod api;
-mod manager;
+pub mod api;
+pub mod manager;
 
 pub use api::*;
 pub use manager::*;

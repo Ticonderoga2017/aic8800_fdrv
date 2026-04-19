@@ -2,6 +2,6 @@
 //!
 //! 包含网络设备实现，连接到 ArceOS 网络栈
 
-mod device;
+pub mod device;
 
 pub use device::*;
