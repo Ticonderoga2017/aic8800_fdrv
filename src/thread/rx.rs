@@ -81,13 +81,13 @@ fn read_block_count_with_retry(bus: &WifiBus, other_int_retries: &mut u32) -> (u
     if block_cnt & SDIO_OTHER_INTERRUPT != 0 {
         *other_int_retries += 1;
         if *other_int_retries > 3 {
-            log::warn!(
+            log::trace!(
                 "[wifi-rx] SDIO_OTHER_INTERRUPT persists after {} retries, giving up",
                 other_int_retries
             );
             return (0, false);
         }
-        log::warn!(
+        log::trace!(
             "[wifi-rx] SDIO_OTHER_INTERRUPT (0x{:02x}), re-read",
             block_cnt
         );
@@ -251,7 +251,7 @@ fn get_crypto_header_len(decr_status: u8) -> usize {
 /// 提取以太网类型
 fn extract_ethertype(mpdu: &[u8], ether_type_offset: usize, pkt_len: usize) -> Option<u16> {
     if pkt_len < ether_type_offset + 2 {
-        log::warn!(
+        log::trace!(
             "[wifi-rx] MPDU too short for LLC/SNAP: pkt_len={}, need={}",
             pkt_len,
             ether_type_offset + 2
@@ -390,7 +390,7 @@ fn process_cmd_rsp(bus: &WifiBus, msg_data: &[u8]) {
     let msg_id = u16::from_le_bytes([msg_data[0], msg_data[1]]);
 
     let expected_cfm = bus.cmd.expected_cfm_id.load(Ordering::Acquire);
-    log::warn!(
+    log::trace!(
         "[wifi-rx] process_cmd_rsp: msg_id=0x{:04x}, expected_cfm=0x{:04x}, raw=[{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}]",
         msg_id, expected_cfm,
         msg_data[0], msg_data[1], msg_data[2], msg_data[3],
@@ -401,13 +401,13 @@ fn process_cmd_rsp(bus: &WifiBus, msg_data: &[u8]) {
         queue.push_back(msg_data.to_vec());
         drop(queue);
         bus.cmd.rsp_pollset.wake();
-        log::warn!("[wifi-rx] process_cmd_rsp: routed to rsp_queue (matched)");
+        log::trace!("[wifi-rx] process_cmd_rsp: routed to rsp_queue (matched)");
     } else {
         let mut queue = bus.tx.ind_queue.lock();
         queue.push_back(msg_data.to_vec());
         drop(queue);
         bus.tx.ind_pollset.wake();
-        log::warn!("[wifi-rx] process_cmd_rsp: routed to ind_queue (no match)");
+        log::trace!("[wifi-rx] process_cmd_rsp: routed to ind_queue (no match)");
     }
 }
 

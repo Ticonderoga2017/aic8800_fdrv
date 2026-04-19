@@ -249,7 +249,7 @@ impl WifiClient {
         send_txpwr_ofst_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
 
         // 2. RF calibration
-        send_rf_calib_req(&self.bus, timeout_ms * 2).map_err(WifiError::from)?;
+        send_rf_calib_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
 
         // 3. ME configuration
         send_me_config_req(&self.bus, timeout_ms).map_err(WifiError::from)?;
