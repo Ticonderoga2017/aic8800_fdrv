@@ -6,12 +6,12 @@ license = "Apache-2.0"
 
 [dependencies]
 log = "0.4"
-axdriver_sdio = { path = "../axdriver_sdio" }
+axdriver_sdio = { git = "https://github.com/Ticonderoga2017/axdriver_sdio.git" }
 axpoll = "0.1"
 kspin = "0.1"
-axsync = { path = "../../StarryOS/arceos/modules/axsync" }
-axtask = { path = "../../StarryOS/arceos/modules/axtask", features = ["multitask"] }
-axhal = { path = "../../StarryOS/arceos/modules/axhal", features = ["irq"] }
+axsync = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axsync" }
+axtask = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axtask", features = ["multitask"] }
+axhal = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axhal", features = ["irq"] }
 # crypto 依赖
 hmac = { version = "0.12", default-features = false }
 sha1 = { version = "0.10", default-features = false }
@@ -21,7 +21,7 @@ pbkdf2 = { version = "0.12", default-features = false }
 
 axdriver_base = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "dev-v01" }
 axdriver_net = { git = "https://github.com/arceos-org/axdriver_crates.git", tag = "dev-v01" }
-axnet = { path = "../../StarryOS/arceos/modules/axnet" }
+axnet = { git = "https://github.com/Ticonderoga2017/sg2002-arceos.git", package = "axnet" }
 
 # 芯片级常量（SDIO 寄存器地址、帧类型、任务 ID 等）
-aic8800_common = { path = "../aic8800_common" }
+aic8800_common = { git = "https://github.com/Ticonderoga2017/aic8800_common.git" }
