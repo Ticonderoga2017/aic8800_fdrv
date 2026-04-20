@@ -64,11 +64,13 @@ pub fn start(bus: Arc<WifiBus>) {
                 // 双重检查
                 let pending = has_pending_work(&bus);
                 if did_work || pending {
-                    log::trace!("[wifi-tx] self-wake: did_work={}, pending={}", did_work, pending);
                     cx.waker().wake_by_ref();
                 }
 
-                bus.cmd.rsp_pollset.wake();
+                // 只在有错误时唤醒 rsp_pollset，避免无意义的任务切换
+                if bus.cmd.rsp_error.load(Ordering::Acquire) {
+                    bus.cmd.rsp_pollset.wake();
+                }
 
                 Poll::Pending
             }))
@@ -103,7 +105,7 @@ fn process_cmd_tx(bus: &WifiBus) -> bool {
 
     // 恢复中断状态
     if fc_ok && did_work {
-        log::trace!("[wifi-tx] process_cmd_tx: CMD sent OK, len={}", send_len);
+        log::debug!("[wifi-tx] process_cmd_tx: CMD sent OK, len={}", send_len);
         bus.rx.irq_pollset.wake();
         transport.unmask_card_irq();
     } else if !fc_ok {

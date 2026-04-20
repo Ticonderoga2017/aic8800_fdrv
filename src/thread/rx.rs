@@ -38,18 +38,21 @@ pub fn start(bus: Arc<WifiBus>) {
                     RX_WAKE_COUNT.fetch_add(1, Ordering::Relaxed);
                 }
 
-                // 处理所有待读数据
+                // 处理所有待读数据（内部会 mask CARD_INT，但不 unmask）
                 process_rx_frames(&bus);
 
+                // 先注册 waker，再 unmask CARD_INT
+                // 这样 ISR 触发时 waker 已经就位，不会丢失唤醒
                 bus.rx.irq_pollset.register(cx.waker());
 
-                // 检查 rx_irq_pending 标志
-                //   如果 ISR 在 process_rx_frames 和 register 之间触发，
-                //   rx_irq_pending 会被设置，这里捕获它
+                // 关键：先 register waker，再 unmask CARD_INT
+                // 如果 ISR 在 unmask 后立即触发，waker 已经注册好了
+                bus.transport.unmask_card_irq();
+
+                // 双重检查：如果 ISR 在 register 和 unmask 之间触发了
                 if bus.rx.irq_pending.swap(false, Ordering::AcqRel) {
-                    // ISR 已触发但没有调用 wake()，手动重新处理
                     process_rx_frames(&bus);
-                    // 重新调度自己，继续检查
+                    bus.transport.unmask_card_irq();
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
@@ -111,6 +114,9 @@ fn read_fifo_data(bus: &WifiBus, block_cnt: u8) -> Option<Vec<u8>> {
 }
 
 /// 读取 SDIO FIFO 中的所有帧并按类型分发
+///
+/// 注意：调用方负责在适当时候 unmask CARD_INT（不在本函数内 unmask），
+/// 以避免 unmask 和 waker 注册之间的竞态窗口。
 fn process_rx_frames(bus: &WifiBus) {
     // ISR 只设 flag 不 mask，这里先 mask CARD_INT 防止重入
     bus.transport.mask_card_irq();
@@ -142,9 +148,6 @@ fn process_rx_frames(bus: &WifiBus) {
 
         dispatch_frames(bus, &buf);
     }
-
-    // 处理完成后恢复 CARD_INT（RX 线程下次由 ISR wake 唤醒）
-    bus.transport.unmask_card_irq();
 }
 
 
